@@ -1,0 +1,225 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var AOI = ee.FeatureCollection("projects/ee-nrm-gee4geo/assets/Narok_county_WGS84"),
+    Wheat_Points = ee.FeatureCollection("projects/spatial-planning-303506/assets/Narok_wheat_CLP"),
+    ic_s2 = ee.ImageCollection("COPERNICUS/S2_SR"),
+    DEM = ee.Image("USGS/SRTMGL1_003");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+// Import boundaries from asset
+
+// Set map center to the aoi for making sure we have the correct study area
+Map.centerObject(AOI, 10)
+// Define period of analysis
+var start = '2020-04-01';
+var end = '2020-08-31';
+var season = ee.Filter.date(start,end);
+print(season);
+
+
+
+
+
+
+// Import Sentinel-1 collection
+var sentinel1 =  ee.ImageCollection('COPERNICUS/S1_GRD');
+// Filter Sentinel-1 collection for study area, date ranges and polarization components
+var sCollection =  sentinel1
+                    //filter by aoi and time
+                    .filterBounds(AOI)
+                    .filter(season)
+                    // Filter to get images with VV and VH dual polarization
+                    .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VV'))
+                    .filter(ee.Filter.listContains('transmitterReceiverPolarisation', 'VH'))
+                    // Filter to get images collected in interferometric wide swath mode.
+                    .filter(ee.Filter.eq('instrumentMode', 'IW'));
+// Also filter based on the orbit: descending or ascending mode
+var desc = sCollection.filter(ee.Filter.eq('orbitProperties_pass', 'DESCENDING'));
+var asc = sCollection.filter(ee.Filter.eq('orbitProperties_pass', 'ASCENDING'));
+// Inspect number of tiles returned after the search; we will use the one with more tiles
+print("descending tiles ",desc.size());
+print("ascending tiles ",asc.size());
+// Also Inspect one file
+print(asc.first());
+
+
+
+
+
+
+// Create a composite from means at different polarizations and look angles.
+var composite = ee.Image.cat([
+  asc.select('VH').mean(),
+  asc.select('VV').mean(),
+  desc.select('VH').mean()
+]).focal_median();
+// Display as a composite of polarization and backscattering characteristics.
+Map.addLayer(composite.clip(AOI), {min: [-25,-20, -25], max: [0, 10, 0]}, 'composite');
+
+
+
+
+
+
+var collection = ee.ImageCollection(asc.select('VH').merge(desc.select('VH')))
+// Mean
+var mean = collection.reduce(ee.Reducer.mean());
+//alternate: var mean = collection.mean();
+// Median
+var med = collection.reduce(ee.Reducer.median());
+//alternate: var med = collection.median();
+// Standard Deviation
+var sd = collection.reduce(ee.Reducer.stdDev());
+// Percentile
+// Lower values---possibily wet
+var p10 = collection.reduce(ee.Reducer.percentile([10]));
+// Higher values---possibily dry/bright
+var p90 = collection.reduce(ee.Reducer.percentile([90]));
+
+
+print(p10, 'P10')
+print(p90, 'P90')
+
+
+
+// compute difference of p90 and p10
+var nd_diff = p90.subtract(p10).focal_mean();
+// Plot the difference layer to use with inspector
+Map.addLayer(nd_diff.clip(AOI), {}, 'diff', false);
+// Threshold difference value from the inspector from some known location
+var th = 7; // Selecting this value is tricky;
+var crop_mask = nd_diff.gt(th);
+var crop = crop_mask.updateMask(crop_mask);
+var cropViz = {palette:"yellow"};
+Map.addLayer(crop.clip(AOI), cropViz, 'Potential crop areas');
+//Focus on some speific plot
+
+
+
+
+
+///////// Transform our data (from image) into objects 
+
+var seeds = ee.Algorithms.Image.Segmentation.seedGrid(20)
+
+var im_snic = ee.Algorithms.Image.Segmentation.SNIC({
+  image: composite, 
+  compactness: 1, 
+  connectivity:4, 
+  seeds: seeds})
+
+
+print(im_snic, "Image SNIC")
+  
+Map.addLayer(im_snic.select("clusters").clip(AOI).randomVisualizer(), {}, "clusters", false)
+
+
+
+
+
+//////   Export data
+/**
+var CRS = 'EPSG:4326'; // Only if you want export in specific reference system
+Export.image.toDrive({
+  image: crop,
+  description: 'exporting-crop-to-drive',
+  fileNamePrefix: 'rcmrd_crop',
+  folder: 'GEE_export', // Name of the Google Drive folder
+  scale: 10,
+  region: AOI ,
+  maxPixels: 1e13,
+  crs: CRS
+});
+
+**/
+
+Map.addLayer(Wheat_Points, {color:"red"}, 'NAROK_WHEAT_POINTS');
+
+
+
+
+
+//////////////////////////////////////////////////////////////////////////////////////////////
+/////////////////////////////////////////////////////////////////////////////////////////////
+///////////////////////////////////////////////////////////////////////////////////////////////
+
+/////////////////////////////////////////// Upload image to classify ///////////////////////////////////////
+
+///// Function to mask clouds
+
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+
+  // Bits 10 and 11 are clouds and cirrus, respectively.
+  var cloudBitMask = 1 << 10;
+  var cirrusBitMask = 1 << 11;
+
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+      .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+
+  return image.updateMask(mask).divide(10000);
+}
+
+var bands = ["B2", "B3", "B4", "B8", "B8A", "B11"] 
+
+var img = ic_s2.filterDate("2020-04-01", "2020-08-31")
+              .filterMetadata("CLOUDY_PIXEL_PERCENTAGE", "less_than", 10)
+              .filterBounds(AOI)
+              .map(maskS2clouds)
+              .select(bands)
+              .median()
+              
+//////// We define this collection to be able to .map() the NDVI function in order to get NDVImin, NDVImax, etc.
+
+var collection_S2 = ic_s2.filterDate("2020-04-01", "2020-08-31")
+              .filterMetadata("CLOUDY_PIXEL_PERCENTAGE", "less_than", 10)
+              .filterBounds(AOI)
+              .map(maskS2clouds)
+              .select(bands)
+
+//Map.addLayer(img.clip(AOI), {min:0, max:0.35, bands:["B4", "B3", "B2"]}, "RGB to classify")
+
+//////////////// Let's create new classifier variables (NDVI, NDVImax, NDVImin, NDVIstdDev, DEM, Slopes)
+
+var NDVI = img.normalizedDifference(["B8", "B4"]).rename("NDVI")
+
+//////// Function to map NDVI into the collection_S2
+
+function ndvi (img){
+  
+  var NDVI = img.normalizedDifference(["B8", "B4"])
+  
+  return NDVI
+}
+
+var NDVImax = collection_S2.map(ndvi).max().rename("NDVImax")
+
+var NDVImin = collection_S2.map(ndvi).min().rename("NDVImin")
+
+var slopes = ee.Terrain.slope(DEM).divide(100).rename("slope")
+
+var DEM = DEM.divide(10000).rename("elevation")
+
+///////////////// Stack all the data into the same image 
+
+var image = img.addBands(NDVI).addBands(NDVImax).addBands(NDVImin).addBands(slopes).addBands(DEM)
+
+var bands_image = image.bandNames()
+
+Map.addLayer(image.clip(AOI), {min:0, max:0.35, bands:["B4", "B3", "B2"]}, "RGB to classify")
+
+///////////////////////////////////// SNIC ///////////////////////////
+
+///////// Transform our data (from image) into objects 
+
+var seeds_S2 = ee.Algorithms.Image.Segmentation.seedGrid(20)
+
+var im_snic_S2 = ee.Algorithms.Image.Segmentation.SNIC({
+  image: image, 
+  compactness: 1, 
+  connectivity:4, 
+  seeds: seeds_S2})
+
+
+print(im_snic_S2, "Image SNIC_S2")
+  
+Map.addLayer(im_snic_S2.select("clusters").clip(AOI).randomVisualizer(), {}, "clusters_S2", false)
