@@ -1,0 +1,14 @@
+Function FindLabel ( [FIRST_CouN], [CouCode] )
+
+  If [FIRST_CouN] = "West Pokot" Or [FIRST_CouN] = "Trans Nzoia" Or [FIRST_CouN] = "Bungoma" Or [FIRST_CouN] = "Busia"Or [FIRST_CouN] = "Siaya"Or [FIRST_CouN] = "Homabay"Or [FIRST_CouN] = "Migori"Or [FIRST_CouN] = "Homa Bay" Then
+    FindLabel = ""
+    
+  ElseIf [FIRST_CouN] = "Turkana" Or [FIRST_CouN] = "Marsabit" Or [FIRST_CouN] = "Mandera" Or [FIRST_CouN] = "Wajir" Or [FIRST_CouN] = "Isiolo" Or [FIRST_CouN] = "Garissa" Or [FIRST_CouN] = "Kitui" Or [FIRST_CouN] = "Tana River" Or [FIRST_CouN] = "Samburu" Or [FIRST_CouN] = "Laikipia" Or [FIRST_CouN] = "Lamu" Or [FIRST_CouN] = "Kilifi" Or [FIRST_CouN] = "Kwale" Or [FIRST_CouN] = "Taita/Taveta" Or [FIRST_CouN] = "Kajiado" Or [FIRST_CouN] = "Narok" Then
+    FindLabel = [FIRST_CouN]
+    
+  Else
+    FindLabel = [CouCODE]
+    
+  End If
+
+End Function
