@@ -1,0 +1,69 @@
+// Define the area of interest (Nairobi)
+var nairobi = ee.Geometry.Polygon([
+  [[36.660885, -1.219452], [37.046846, -1.219452], [37.046846, -1.453623], [36.660885, -1.453623]]
+]);
+
+// Center the map on Nairobi
+Map.centerObject(nairobi, 11);
+
+// Define a function to mask clouds using the quality band of Sentinel-2
+function maskS2clouds(image) {
+  var qa = image.select('QA60');
+  // Bits 10 and 11 are clouds and cirrus, respectively.
+  var cloudBitMask = ee.Number(2).pow(10).int();
+  var cirrusBitMask = ee.Number(2).pow(11).int();
+  // Both flags should be set to zero, indicating clear conditions.
+  var mask = qa.bitwiseAnd(cloudBitMask).eq(0)
+              .and(qa.bitwiseAnd(cirrusBitMask).eq(0));
+  return image.updateMask(mask).divide(10000);
+}
+
+// Load Sentinel-2 data
+var s2 = ee.ImageCollection('COPERNICUS/S2')
+  .filterDate('2022-01-01', '2022-12-31')
+  .filterBounds(nairobi)
+  .map(maskS2clouds)
+  .median();
+
+// Calculate NDVI (Normalized Difference Vegetation Index)
+var ndvi = s2.normalizedDifference(['B8', 'B4']).rename('NDVI');
+
+// Define green space threshold (NDVI > 0.3 considered as green space)
+var greenSpace = ndvi.gt(0.3);
+
+// Calculate the area of green spaces
+var greenSpaceArea = greenSpace.multiply(ee.Image.pixelArea()).reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: nairobi,
+  scale: 10,
+  maxPixels: 1e9
+}).get('NDVI');
+
+// Calculate the total urban area
+var totalArea = ee.Image.pixelArea().reduceRegion({
+  reducer: ee.Reducer.sum(),
+  geometry: nairobi,
+  scale: 10,
+  maxPixels: 1e9
+}).get('area');
+
+// Calculate the percentage of green space
+var greenSpacePercentage = ee.Number(greenSpaceArea).divide(totalArea).multiply(100);
+
+// Print the results
+var cityName = 'Nairobi';
+greenSpaceArea.evaluate(function(area) {
+  totalArea.evaluate(function(total) {
+    greenSpacePercentage.evaluate(function(percentage) {
+      print('City: ' + cityName);
+      print('Green Area (sq meters): ' + area);
+      print('Total Area (sq meters): ' + total);
+      print('Percentage of Green Area: ' + percentage + '%');
+    });
+  });
+});
+
+// Add layers to the map
+Map.addLayer(s2, {bands: ['B4', 'B3', 'B2'], max: 0.3}, 'Sentinel-2');
+Map.addLayer(ndvi, {min: 0, max: 1, palette: ['red', 'yellow', 'green']}, 'NDVI');
+Map.addLayer(greenSpace.updateMask(greenSpace), {palette: '00FF00'}, 'Green Space');
