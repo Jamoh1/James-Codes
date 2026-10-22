@@ -1,0 +1,264 @@
+/**** Start of imports. If edited, may not auto-convert in the playground. ****/
+var kenya = ee.FeatureCollection("projects/okello-pk/assets/Kenya_Counties_dissolved");
+/***** End of imports. If edited, may not auto-convert in the playground. *****/
+
+// ---------------------------
+// 1. Input dataset
+// ---------------------------
+var dataset = ee.ImageCollection("ESA/WorldCover/v100")
+  .first()
+  .clip(kenya);
+
+// Check the band name
+print("Dataset band names:", dataset.bandNames());
+
+// Land cover visualization
+var landcoverVis = {
+  bands: ['Map'],
+  min: 0,
+  max: 100
+};
+
+Map.centerObject(kenya, 5);
+Map.addLayer(dataset, landcoverVis, "Landcover");
+
+// ---------------------------
+// 2. Land cover class definitions
+// ---------------------------
+var classNames = ee.Dictionary({
+  10: 'Trees',
+  20: 'Shrubland',
+  30: 'Grassland',
+  40: 'Cropland',
+  50: 'Built-up',
+  60: 'Barren / sparse vegetation',
+  70: 'Snow and ice',
+  80: 'Open water',
+  90: 'Herbaceous wetland',
+  95: 'Mangroves',
+  100: 'Moss and lichen'
+});
+
+var classPalette = ee.Dictionary({
+  10: '#006400',
+  20: '#ffbb22',
+  30: '#ffff4c',
+  40: '#f096ff',
+  50: '#fa0000',
+  60: '#b4b4b4',
+  70: '#f0f0f0',
+  80: '#0064c8',
+  90: '#0096a0',
+  95: '#00cf75',
+  100: '#fae6a0'
+});
+
+var palette = ['006400', 'ffbb22', 'ffff4c', 'f096ff', 'fa0000',
+               'b4b4b4', 'f0f0f0', '0064c8', '0096a0', '00cf75', 'fae6a0'];
+
+var names = ['Trees', 'Shrubland', 'Grassland', 'Cropland', 'Built-up',
+             'Barren / sparse vegetation', 'Snow and ice', 'Open water',
+             'Herbaceous wetland', 'Mangroves', 'Moss and lichen'];
+
+// ---------------------------
+// 3. Total area of Kenya
+// ---------------------------
+var totalAreaHa = ee.Image.pixelArea()
+  .divide(1e4) // convert m² to hectares
+  .reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: kenya,
+    scale: 10,
+    maxPixels: 1e12
+  })
+  .get('area');
+
+print("Total study area (ha):", totalAreaHa);
+
+// ---------------------------
+// 4. Area by class
+// ---------------------------
+var classCodes = ee.List(classNames.keys());
+
+var classAreaStats = classCodes.map(function(code) {
+  code = ee.Number(code);
+
+  var classMask = dataset.eq(code);
+  var areaHa = ee.Image.pixelArea()
+    .updateMask(classMask)
+    .divide(1e4)
+    .reduceRegion({
+      reducer: ee.Reducer.sum(),
+      geometry: kenya,
+      scale: 10,
+      maxPixels: 1e12
+    })
+    .get('area');
+
+  var areaHaNum = ee.Number(areaHa);
+  var percent = areaHaNum.divide(ee.Number(totalAreaHa)).multiply(100);
+
+  return ee.Feature(null, {
+    class_code: code,
+    class_name: classNames.get(code),
+    area_ha: areaHaNum,
+    percent_of_total: percent
+  });
+});
+
+var areaFeatureCollection = ee.FeatureCollection(classAreaStats);
+print("Land cover areas by class (ha):", areaFeatureCollection);
+
+// ---------------------------
+// 5. Export land cover raster
+// ---------------------------
+Export.image.toDrive({
+  image: dataset,
+  description: 'Kenya_LULC_2018@100m',
+  region: kenya,
+  scale: 100,
+  maxPixels: 1e12
+});
+
+// ---------------------------
+// 6. Extract selected classes
+// ---------------------------
+
+// Tree cover
+var treemask = dataset.eq(10);
+var Tree = dataset.updateMask(treemask);
+
+var treeAreaHa = ee.Image.pixelArea()
+  .updateMask(treemask)
+  .divide(1e4)
+  .reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: kenya,
+    scale: 10,
+    maxPixels: 1e12
+  })
+  .get('area');
+
+print("Tree cover area (ha):", treeAreaHa);
+print("Tree cover percentage:", ee.Number(treeAreaHa).divide(ee.Number(totalAreaHa)).multiply(100));
+
+var treeVis = {
+  min: 0,
+  max: 10,
+  palette: ['006400']
+};
+Map.addLayer(Tree, treeVis, 'Tree Cover');
+
+// Urban areas
+var urbanmask = dataset.eq(50);
+var urban = dataset.updateMask(urbanmask);
+
+var urbanAreaHa = ee.Image.pixelArea()
+  .updateMask(urbanmask)
+  .divide(1e4)
+  .reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: kenya,
+    scale: 10,
+    maxPixels: 1e12
+  })
+  .get('area');
+
+print("Urban area (ha):", urbanAreaHa);
+
+var urbanVis = {
+  min: 0,
+  max: 50,
+  palette: ['fa0000']
+};
+Map.addLayer(urban, urbanVis, 'Urban');
+
+// Cropland
+var cropmask = dataset.eq(40);
+var Crop = dataset.updateMask(cropmask);
+
+var cropAreaHa = ee.Image.pixelArea()
+  .updateMask(cropmask)
+  .divide(1e4)
+  .reduceRegion({
+    reducer: ee.Reducer.sum(),
+    geometry: kenya,
+    scale: 10,
+    maxPixels: 1e12
+  })
+  .get('area');
+
+print("Cropland area (ha):", cropAreaHa);
+print("Cropland percentage:", ee.Number(cropAreaHa).divide(ee.Number(totalAreaHa)).multiply(100));
+
+var cropVis = {
+  min: 0,
+  max: 40,
+  palette: ['f096ff']
+};
+Map.addLayer(Crop, cropVis, 'Cropland Cover');
+
+// Export selected land-cover classes
+Export.image.toDrive({
+  image: urban,
+  description: 'KENYA_URBANLAYER_2020',
+  region: kenya,
+  scale: 100,
+  maxPixels: 1e12
+});
+
+Export.image.toDrive({
+  image: Crop,
+  description: 'KENYA_Cropland_2020',
+  region: kenya,
+  scale: 100,
+  maxPixels: 1e12
+});
+
+// ---------------------------
+// 7. Legend
+// ---------------------------
+var legend = ui.Panel({
+  style: {
+    position: 'bottom-right',
+    padding: '6px 15px'
+  }
+});
+
+var legendTitle = ui.Label({
+  value: 'Legend',
+  style: {
+    fontWeight: 'bold',
+    fontSize: '18px',
+    margin: '0 0 4px 0',
+    padding: '0'
+  }
+});
+
+legend.add(legendTitle);
+
+var makeRow = function(color, name) {
+  var colorBox = ui.Label({
+    style: {
+      backgroundColor: '#' + color,
+      padding: '8px',
+      margin: '0 0 4px 0'
+    }
+  });
+
+  var description = ui.Label({
+    value: name,
+    style: { margin: '0 0 4px 6px' }
+  });
+
+  return ui.Panel({
+    widgets: [colorBox, description],
+    layout: ui.Panel.Layout.Flow('horizontal')
+  });
+};
+
+for (var i = 0; i < names.length; i++) {
+  legend.add(makeRow(palette[i], names[i]));
+}
+
+Map.add(legend);
